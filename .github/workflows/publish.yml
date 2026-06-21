@@ -2,12 +2,14 @@ name: Publish to npm
 
 on:
   push:
-    tags:
-      - 'v*'
+    branches:
+      - master
 
 jobs:
   publish:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
 
     steps:
       - name: Checkout
@@ -29,3 +31,14 @@ jobs:
         run: npm publish --access public
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: Configure git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Create and push tag
+        run: |
+          VERSION="v$(node -p "require('./package.json').version")"
+          git tag "$VERSION"
+          git push origin "$VERSION"
