@@ -3,7 +3,8 @@ import { generateRandomString } from "better-auth/crypto";
 import { parseUserInput, parseUserOutput } from "better-auth/db";
 import { setSessionCookie } from "better-auth/cookies";
 import { APIError, createAuthEndpoint, originCheck } from "better-auth/api";
-import { createHash } from "crypto";
+import { base64Url } from "@better-auth/utils/base64";
+import { createHash } from "@better-auth/utils/hash";
 import * as z from "zod";
 
 type SendEmailPayload = {
@@ -64,13 +65,12 @@ function getExpiresAt(expiresInSeconds: number) {
 }
 
 function generateOtp(length: number) {
-  // Use cryptographically secure random string, then map to digits
-  const random = generateRandomString(length * 2, "0-9");
-  return random.slice(0, length);
+  return generateRandomString(length, "0-9");
 }
 
-function hashOtp(otp: string) {
-  return createHash("sha256").update(otp).digest("hex");
+async function hashOtp(otp: string) {
+  const hash = await createHash("SHA-256").digest(new TextEncoder().encode(otp));
+  return base64Url.encode(new Uint8Array(hash), { padding: false });
 }
 
 function tokenIdentifier(token: string) {
@@ -111,7 +111,7 @@ async function atomicVerifyOtp(
   // delete-first to prevent concurrent reuse
   await ctx.context.internalAdapter.deleteVerificationByIdentifier(identifier);
 
-  if (storedHashedOtp !== hashOtp(providedOtp)) {
+  if (storedHashedOtp !== await hashOtp(providedOtp)) {
     await ctx.context.internalAdapter.createVerificationValue({
       identifier,
       value: `${storedHashedOtp}:${attempts + 1}`,
@@ -173,14 +173,14 @@ export const passwordlessBundle = (options: PasswordlessBundleOptions) => {
         await ctx.context.internalAdapter
           .createVerificationValue({
             identifier: otpIdentifier(email),
-            value: `${hashOtp(otp)}:0`,
+            value: `${await hashOtp(otp)}:0`,
             expiresAt: getExpiresAt(expiresInSeconds),
           })
           .catch(async () => {
             await ctx.context.internalAdapter.deleteVerificationByIdentifier(otpIdentifier(email));
             await ctx.context.internalAdapter.createVerificationValue({
               identifier: otpIdentifier(email),
-              value: `${hashOtp(otp)}:0`,
+              value: `${await hashOtp(otp)}:0`,
               expiresAt: getExpiresAt(expiresInSeconds),
             });
           });
