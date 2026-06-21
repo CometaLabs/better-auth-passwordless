@@ -30,7 +30,8 @@
     "build": "tsup src/index.ts src/server.ts src/client.ts --format cjs,esm --dts",
     "dev": "tsup src/index.ts src/server.ts src/client.ts --format cjs,esm --dts --watch",
     "lint": "tsc --noEmit",
-    "prepublishOnly": "npm run build"
+    "prepublishOnly": "npm run build",
+    "prepare": "husky"
   },
   "keywords": [
     "better-auth",
@@ -61,9 +62,10 @@
   },
   "devDependencies": {
     "@types/node": "^20.0.0",
+    "better-auth": "^1",
+    "husky": "^9.1.7",
     "tsup": "^8.0.0",
-    "typescript": "^5.0.0",
-    "better-auth": "^1"
+    "typescript": "^5.0.0"
   },
   "allowScripts": {
     "esbuild@0.27.7": true
