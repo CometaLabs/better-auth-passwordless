@@ -33,7 +33,7 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
       - name: Bump patch version
-        run: npm version patch -m "chore: release %s [skip ci]"
+        run: npm version patch -m 'chore: release %s [skip ci]'
 
       - name: Push version commit and tag
         run: git push --follow-tags
