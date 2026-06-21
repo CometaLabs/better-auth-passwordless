@@ -1,6 +1,6 @@
 {
   "name": "@cometalabs/better-auth-passwordless",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "Passwordless authentication plugin for Better Auth — OTP codes and magic links via email",
   "type": "module",
   "main": "./dist/index.js",
