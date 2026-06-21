@@ -1,7 +1,7 @@
 <a href="https://cometalabs.io">
   <picture>
-    <source srcset="https://cometalabs-assets.s3.amazonaws.com/nitro-sensors/assets/cometa-banner.png" />
-    <img alt="Cometa" src="https://cometalabs-assets.s3.amazonaws.com/nitro-sensors/assets/cometa-banner.png" />
+    <source srcset="https://cometalabs-assets.s3.us-east-1.amazonaws.com/better-auth-passwordless/assets/cometa-banner.png" />
+    <img alt="Cometa" src="https://cometalabs-assets.s3.us-east-1.amazonaws.com/better-auth-passwordless/assets/cometa-banner.png" />
   </picture>
 </a>
 
