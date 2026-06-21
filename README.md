@@ -166,3 +166,4 @@ Source code: [github.com/CometaLabs/better-auth-passwordless](https://github.com
 ## License
 
 MIT - © 2025 Cometa Labs
+
