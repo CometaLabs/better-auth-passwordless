@@ -3,6 +3,7 @@ import { generateRandomString } from "better-auth/crypto";
 import { parseUserInput, parseUserOutput } from "better-auth/db";
 import { setSessionCookie } from "better-auth/cookies";
 import { APIError, createAuthEndpoint, originCheck } from "better-auth/api";
+import { createHash } from "crypto";
 import * as z from "zod";
 
 type SendEmailPayload = {
@@ -63,12 +64,13 @@ function getExpiresAt(expiresInSeconds: number) {
 }
 
 function generateOtp(length: number) {
-  const digits = "0123456789";
-  let out = "";
-  for (let i = 0; i < length; i++) {
-    out += digits[Math.floor(Math.random() * digits.length)];
-  }
-  return out;
+  // Use cryptographically secure random string, then map to digits
+  const random = generateRandomString(length * 2, "0-9");
+  return random.slice(0, length);
+}
+
+function hashOtp(otp: string) {
+  return createHash("sha256").update(otp).digest("hex");
 }
 
 function tokenIdentifier(token: string) {
@@ -79,17 +81,17 @@ function otpIdentifier(email: string) {
   return `passwordless-bundle-otp:sign-in:${email.toLowerCase()}`;
 }
 
+function pendingTokenIdentifier(email: string) {
+  return `passwordless-bundle-pending-token:${email.toLowerCase()}`;
+}
+
 async function atomicVerifyOtp(
   ctx: any,
-  opts: Required<
-    Pick<PasswordlessBundleOptions, "allowedAttemptsOtp" | "expiresInSeconds">
-  >,
+  opts: Required<Pick<PasswordlessBundleOptions, "allowedAttemptsOtp">>,
   identifier: string,
   providedOtp: string,
 ) {
-  const verificationValue = await ctx.context.internalAdapter.findVerificationValue(
-    identifier,
-  );
+  const verificationValue = await ctx.context.internalAdapter.findVerificationValue(identifier);
   if (!verificationValue) {
     throw APIError.fromStatus("BAD_REQUEST", { message: "INVALID_OTP" });
   }
@@ -98,7 +100,7 @@ async function atomicVerifyOtp(
     throw APIError.fromStatus("BAD_REQUEST", { message: "OTP_EXPIRED" });
   }
 
-  const [storedOtp, attemptsStr] = String(verificationValue.value).split(":");
+  const [storedHashedOtp, attemptsStr] = String(verificationValue.value).split(":");
   const attempts = attemptsStr ? parseInt(attemptsStr, 10) : 0;
 
   if (attempts >= opts.allowedAttemptsOtp) {
@@ -106,13 +108,13 @@ async function atomicVerifyOtp(
     throw APIError.fromStatus("FORBIDDEN", { message: "TOO_MANY_ATTEMPTS" });
   }
 
-  // delete-first to reduce concurrent reuse; re-create on failure
+  // delete-first to prevent concurrent reuse
   await ctx.context.internalAdapter.deleteVerificationByIdentifier(identifier);
 
-  if (storedOtp !== providedOtp) {
+  if (storedHashedOtp !== hashOtp(providedOtp)) {
     await ctx.context.internalAdapter.createVerificationValue({
       identifier,
-      value: `${storedOtp}:${attempts + 1}`,
+      value: `${storedHashedOtp}:${attempts + 1}`,
       expiresAt: verificationValue.expiresAt,
     });
     throw APIError.fromStatus("BAD_REQUEST", { message: "INVALID_OTP" });
@@ -138,7 +140,25 @@ export const passwordlessBundle = (options: PasswordlessBundleOptions) => {
       }, async (ctx) => {
         const email = ctx.body.email.toLowerCase();
 
+        // Invalidate any previous pending magic link token for this email
+        const pendingId = pendingTokenIdentifier(email);
+        const pendingRef = await ctx.context.internalAdapter.findVerificationValue(pendingId);
+        if (pendingRef) {
+          await ctx.context.internalAdapter.deleteVerificationByIdentifier(
+            tokenIdentifier(String(pendingRef.value)),
+          );
+          await ctx.context.internalAdapter.deleteVerificationByIdentifier(pendingId);
+        }
+
         const token = generateRandomString(32, "a-z", "A-Z");
+
+        // Store a reference from email → token so we can invalidate it later
+        await ctx.context.internalAdapter.createVerificationValue({
+          identifier: pendingId,
+          value: token,
+          expiresAt: getExpiresAt(expiresInSeconds),
+        });
+
         await ctx.context.internalAdapter.createVerificationValue({
           identifier: tokenIdentifier(token),
           value: JSON.stringify({
@@ -153,16 +173,14 @@ export const passwordlessBundle = (options: PasswordlessBundleOptions) => {
         await ctx.context.internalAdapter
           .createVerificationValue({
             identifier: otpIdentifier(email),
-            value: `${otp}:0`,
+            value: `${hashOtp(otp)}:0`,
             expiresAt: getExpiresAt(expiresInSeconds),
           })
           .catch(async () => {
-            await ctx.context.internalAdapter.deleteVerificationByIdentifier(
-              otpIdentifier(email),
-            );
+            await ctx.context.internalAdapter.deleteVerificationByIdentifier(otpIdentifier(email));
             await ctx.context.internalAdapter.createVerificationValue({
               identifier: otpIdentifier(email),
-              value: `${otp}:0`,
+              value: `${hashOtp(otp)}:0`,
               expiresAt: getExpiresAt(expiresInSeconds),
             });
           });
@@ -259,9 +277,11 @@ export const passwordlessBundle = (options: PasswordlessBundleOptions) => {
           redirectWithError("ATTEMPTS_EXCEEDED");
         }
 
-        await ctx.context.internalAdapter.updateVerificationByIdentifier(tokenIdentifier(token), {
-          value: JSON.stringify({ ...parsed, attempt: attempt + 1 }),
-        });
+        // delete-first to prevent concurrent reuse of the magic link
+        await ctx.context.internalAdapter.deleteVerificationByIdentifier(tokenIdentifier(token));
+        await ctx.context.internalAdapter.deleteVerificationByIdentifier(
+          pendingTokenIdentifier(parsed.email),
+        );
 
         let isNewUser = false;
         let user = await ctx.context.internalAdapter
@@ -313,13 +333,23 @@ export const passwordlessBundle = (options: PasswordlessBundleOptions) => {
 
         await atomicVerifyOtp(
           ctx,
-          {
-            allowedAttemptsOtp,
-            expiresInSeconds,
-          },
+          { allowedAttemptsOtp },
           otpIdentifier(email),
           otp,
         );
+
+        // Invalidate the pending magic link token for this email since OTP succeeded
+        const pendingRef = await ctx.context.internalAdapter.findVerificationValue(
+          pendingTokenIdentifier(email),
+        );
+        if (pendingRef) {
+          await ctx.context.internalAdapter.deleteVerificationByIdentifier(
+            tokenIdentifier(String(pendingRef.value)),
+          );
+          await ctx.context.internalAdapter.deleteVerificationByIdentifier(
+            pendingTokenIdentifier(email),
+          );
+        }
 
         let user = await ctx.context.internalAdapter
           .findUserByEmail(email)
@@ -366,4 +396,3 @@ export const passwordlessBundle = (options: PasswordlessBundleOptions) => {
     options,
   } satisfies BetterAuthPlugin;
 };
-
