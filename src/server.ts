@@ -85,7 +85,7 @@ function pendingTokenIdentifier(email: string) {
   return `passwordless-bundle-pending-token:${email.toLowerCase()}`;
 }
 
-async function atomicVerifyOtp(
+async function verifyOtpValue(
   ctx: any,
   opts: Required<Pick<PasswordlessBundleOptions, "allowedAttemptsOtp">>,
   identifier: string,
@@ -108,17 +108,16 @@ async function atomicVerifyOtp(
     throw APIError.fromStatus("FORBIDDEN", { message: "TOO_MANY_ATTEMPTS" });
   }
 
-  // delete-first to prevent concurrent reuse
-  await ctx.context.internalAdapter.deleteVerificationByIdentifier(identifier);
-
   if (storedHashedOtp !== await hashOtp(providedOtp)) {
-    await ctx.context.internalAdapter.createVerificationValue({
-      identifier,
+    // increment attempts on failure, keep the record alive
+    await ctx.context.internalAdapter.updateVerificationByIdentifier(identifier, {
       value: `${storedHashedOtp}:${attempts + 1}`,
-      expiresAt: verificationValue.expiresAt,
     });
     throw APIError.fromStatus("BAD_REQUEST", { message: "INVALID_OTP" });
   }
+
+  // OTP correct — delete it so it can't be reused, and invalidate the magic link
+  await ctx.context.internalAdapter.deleteVerificationByIdentifier(identifier);
 }
 
 export const passwordlessBundle = (options: PasswordlessBundleOptions) => {
@@ -331,14 +330,14 @@ export const passwordlessBundle = (options: PasswordlessBundleOptions) => {
         const { email: rawEmail, otp, name, image, ...rest } = ctx.body;
         const email = rawEmail.toLowerCase();
 
-        await atomicVerifyOtp(
+        await verifyOtpValue(
           ctx,
           { allowedAttemptsOtp },
           otpIdentifier(email),
           otp,
         );
 
-        // Invalidate the pending magic link token for this email since OTP succeeded
+        // OTP verified — invalidate the magic link from the same email so it can't be reused
         const pendingRef = await ctx.context.internalAdapter.findVerificationValue(
           pendingTokenIdentifier(email),
         );
